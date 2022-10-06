@@ -1,0 +1,3 @@
+Embed dimension:200
+Hidden dimension:50
+Test Accuracy:0.8721002340316772
