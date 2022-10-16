@@ -4,14 +4,15 @@ import re
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
-from torch.nn.utils.rnn import pad_sequence
 import pickle
 import pandas as pd
-from train import model_train
-from model import Net
+from train1 import model_train
+from model1 import Net
 import os
 
 from  matplotlib import pyplot as plt
+
+from transformers import BertTokenizer
 
 def nlp_preprocess(text): 
     global max_len
@@ -25,34 +26,13 @@ def nlp_preprocess(text):
     return ret
 
 class CustomDataSet(Dataset):
-    def __init__(self, data, edim=100):
+    def __init__(self, data):
         """
         data --> Test/Train data in Sentence-Review form
         edim --> Embed dimension
         """
         self.data = data
 
-        #For creating a python dictionary between words and their glove embeddings(torch tensor form) 
-        Path = '/raid/home/anikethv/glove/glove.6B/glove.6B.{}d.txt'.format(edim)
-        i=0
-        vec = []
-        embedmap = dict()
-
-        with open(Path,'r') as f:
-            for line in f:
-                values = line.split()
-                word = values[0]
-                vector = [float(i) for i in values[1:]]
-                if len(vector)!=edim:
-                    vector = [float(0.1) for _ in range(0,edim)]
-                vec.append(vector)
-                embedmap[word] = i
-                i+=1
-        vector = [float(0.1) for _ in range(0,edim)] #Add another vector for unknown token(catchall for all Unknowns--UNK, PADS)
-        vec.append(vector)
-
-        self.embedmap = embedmap
-        self.embeddings = torch.tensor(vec, dtype=torch.float)
 
     def __len__(self):
         return len(self.data)
@@ -61,35 +41,54 @@ class CustomDataSet(Dataset):
         
         #use word embedding(glove) to encode sentences 
         X = nlp_preprocess(self.data.iloc[idx]['review'])
-        X = X.split()
-        vocab = self.embeddings.shape[0]
-        X = [self.embedmap[z] if z in self.embedmap else vocab-1 for z in X] #vocab-1 corresponds to UNK token and PAD token
-        
+
         if self.data.iloc[idx]['sentiment'] == 'positive':
             lab = 1
         else:
             lab = 0
 
-        sample = (X,lab,vocab)
+        sample = (X,lab)
         return sample
+
+
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
 
 #batch(input to this function) would be a list of tuples corresponding to the indices used by dataloader
 def collate_fn_padd(batch):
     '''
     Pads batch of variable length and returns a PAD/UNK mask
     '''
-    vocab = batch[0][2]
-    seqs = [torch.tensor(t[0]) for t in batch]
-    seqs = pad_sequence(seqs, batch_first=True, padding_value=vocab-1) #Pad with (vocab-1), the index for the PAD and UNK tokens in the embeddings (N, max_len)
-    mask = torch.where(seqs == (vocab-1), True, False) #mask the UNK tokens and PAD tokens (N, max_len)
+    sens = [t[0] for t in batch]
+    maxlen = max([len(t[0].split()) for t in batch])
+    if maxlen>508:
+        maxlen = 508
+    
     labs = torch.tensor([t[1] for t in batch])
-    return seqs, labs, mask
+    # Encode the sentence
+
+    attention_masks = []
+    input_ids = []
+    for text in sens:
+        encoded = tokenizer.encode_plus(
+        text=text,  # the sentence to be encoded
+        add_special_tokens=True,  # Add [CLS] and [SEP]
+        max_length = maxlen,  # maximum length of a sentence
+        pad_to_max_length=True,  # Add [PAD]s
+        return_attention_mask = True,  # Generate the attention mask
+        return_tensors = 'pt',  # ask the function to return PyTorch tensors
+        truncation=True
+        )
+        attention_masks.append(encoded['attention_mask'])
+        input_ids.append(encoded['input_ids'])
+    
+    input_ids = torch.cat(input_ids)
+    attention_masks = torch.cat(attention_masks) 
+
+    return input_ids, labs, attention_masks 
 
 criterion = nn.CrossEntropyLoss()
-embed_heads = [(100,5), (200,5), (200,8), (300,5), (300,6)]
 
 if __name__ == '__main__':
-    rank = 4 #Change this rank for different train tasks (0-8) is possible range
     
     # CUDA for PyTorch
     gpu_count = torch.cuda.device_count()
@@ -98,24 +97,20 @@ if __name__ == '__main__':
         device = torch.device('cuda:{}'.format(0))
     torch.backends.cudnn.benchmark = True
 
-    Macc = None
-    Mdim = None
     model = None
     save_weights = {}
     
-    (edim,num_heads) = embed_heads[rank]
     
-    path = "Models/Embed-{}_Heads-{}".format(edim,num_heads)
+    path = "Models/BERT_NO_TUNE"
     if not os.path.exists(path):
         os.makedirs(path)
 
-    tdata = CustomDataSet(pd.read_csv('Train dataset.csv'), edim=edim)
-    print("TRAIN START FOR RANK = {}".format(rank))
-    print('Training start for Embed:{}, Num-Heads:{}'.format(edim,num_heads))
-    model = Net(init_embedding=tdata.embeddings, n_heads=num_heads).to(device)
+    tdata = CustomDataSet(pd.read_csv('Train dataset.csv'))
+    print("TRAIN START FOR BERT_NO_TUNE")
+    model = Net().to(device)
     optimiser = torch.optim.Adam(model.parameters(), lr=0.0001)
     vacc, epoch_vs_loss = model_train(model, train_data=tdata, criterion=criterion, optimiser=optimiser, collate_fn=collate_fn_padd, 
-                                      embed=edim, heads=num_heads, device=device, verbose=True)
+                                      device=device, verbose=True)
     print('\n\nAccuracy on Validation set:{}\n'.format(vacc))
     p = path + '/model.pt'
     torch.save(model.state_dict(), p)
