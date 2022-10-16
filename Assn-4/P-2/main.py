@@ -1,7 +1,6 @@
 import string
 import nltk 
 import re
-import numpy as np
 import torch
 import torch.nn as nn
 import pickle
