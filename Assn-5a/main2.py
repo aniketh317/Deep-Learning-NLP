@@ -94,7 +94,7 @@ if __name__ == '__main__':
     gpu_count = torch.cuda.device_count()
     device = torch.device('cpu')
     if gpu_count>0:
-        device = torch.device('cuda:{}'.format(3))
+        device = torch.device('cuda:{}'.format(1))
     torch.backends.cudnn.benchmark = True
 
     model = None
@@ -108,7 +108,10 @@ if __name__ == '__main__':
     tdata = CustomDataSet(pd.read_csv('Train dataset.csv'))
     print("TRAIN START FOR BERT_FINE_TUNE")
     model = Net().to(device)
-    optimiser = torch.optim.Adam(model.parameters(), lr=0.0001)
+    optimiser = []
+    optimiser.append(torch.optim.Adam(model.out.parameters(), lr=0.001))
+    optimiser.append(torch.optim.Adam(model.bert.parameters(), lr=0.00002))
+
     vacc, epoch_vs_loss = model_train(model, train_data=tdata, criterion=criterion, optimiser=optimiser, collate_fn=collate_fn_padd, 
                                       device=device, verbose=True)
     print('\n\nAccuracy on Validation set:{}\n'.format(vacc))
